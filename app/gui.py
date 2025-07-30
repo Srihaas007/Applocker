@@ -19,39 +19,57 @@ def generate_qr_code(secret, email):
     try:
         # Ensure assets directory exists
         import os
-        os.makedirs(os.path.dirname(QR_CODE_FILE), exist_ok=True)
+        assets_dir = os.path.dirname(QR_CODE_FILE)
+        if not os.path.exists(assets_dir):
+            os.makedirs(assets_dir, exist_ok=True)
+            log_event(f"Created assets directory: {assets_dir}")
         
+        # Create TOTP URI
         totp = pyotp.TOTP(secret)
         uri = totp.provisioning_uri(email, issuer_name="AppLocker")
+        log_event(f"Generated TOTP URI for {email}")
         
-        # Create QR code with better settings
+        # Create QR code with qrcode library
         import qrcode
         qr = qrcode.QRCode(
             version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=10,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,  # Medium error correction
+            box_size=10,  # Larger box size for better quality
             border=4,
         )
         qr.add_data(uri)
         qr.make(fit=True)
         
-        # Create image
+        # Create image with high contrast and larger size
         img = qr.make_image(fill_color="black", back_color="white")
+        # Ensure minimum size for the QR code
+        img = img.resize((300, 300), Image.Resampling.LANCZOS)
+        
+        # Save the image
         img.save(QR_CODE_FILE)
+        log_event(f"QR code saved successfully to {QR_CODE_FILE}")
         
-        log_event(f"QR code saved to {QR_CODE_FILE} for user {email}")
-        return QR_CODE_FILE
+        # Verify file was created
+        if os.path.exists(QR_CODE_FILE):
+            file_size = os.path.getsize(QR_CODE_FILE)
+            log_event(f"QR code file verified: {file_size} bytes")
+            return QR_CODE_FILE
+        else:
+            raise FileNotFoundError("QR code file was not created")
         
+    except ImportError as e:
+        log_error(f"Missing qrcode library: {e}")
+        raise ImportError("qrcode library not installed. Run: pip install qrcode")
     except Exception as e:
         log_error(f"Failed to generate QR code: {e}")
-        raise
+        raise RuntimeError(f"QR code generation failed: {str(e)}")
 
 # Function to handle user setup for 2FA authentication only
 def user_setup():
     setup_win = Tk()
     setup_win.title(f"{WINDOW_TITLE} - Setup")
-    setup_win.geometry("600x700")
-    setup_win.resizable(False, False)
+    setup_win.geometry("600x850")  # Much taller to show all elements
+    setup_win.resizable(True, True)  # Allow resizing
     
     # Main frame
     main_frame = Frame(setup_win, padx=20, pady=20)
@@ -106,11 +124,20 @@ def user_setup():
             qr_code_path = generate_qr_code(secret_key, user_email)
             
             # Load and display QR code
-            img = Image.open(qr_code_path)
-            img = img.resize((300, 300))  # Larger QR code
-            photo = ImageTk.PhotoImage(img)
-            qr_label.config(image=photo, text="")
-            qr_label.image = photo  # Keep a reference
+            if os.path.exists(qr_code_path):
+                img = Image.open(qr_code_path)
+                # Resize to fit the frame properly - use larger size
+                img = img.resize((260, 260), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                
+                # Update label to show image with proper sizing
+                qr_label.config(image=photo, text="", compound='none', 
+                               width=260, height=260)
+                qr_label.image = photo  # Keep a reference to prevent garbage collection
+                log_event("QR code displayed successfully")
+            else:
+                qr_label.config(image="", text="QR Code file not found!", 
+                               fg="red", bg="white", compound='none')
             
             # Update secret key display
             secret_entry.config(state=NORMAL)
@@ -118,23 +145,28 @@ def user_setup():
             secret_entry.insert(0, secret_key)
             secret_entry.config(state=DISABLED)
             
-            log_event("QR code generated and displayed successfully")
-            
         except Exception as e:
-            qr_label.config(image="", text=f"QR Code generation failed: {str(e)}", fg="red")
+            qr_label.config(image="", text=f"QR Generation Error:\n{str(e)}", fg="red", bg="white")
             log_error(f"QR code generation error: {e}")
+            # Show detailed error to user
+            messagebox.showerror("QR Code Error", f"Failed to generate QR code:\n{str(e)}")
+            
+    # Import os for file checking
+    import os
 
     # Generate QR button
     Button(main_frame, text="Generate My QR Code", command=generate_user_qr, 
            bg="lightblue", font=("Arial", 12, "bold"), pady=5).pack(pady=10)
 
-    # QR Code display frame
-    qr_frame = Frame(main_frame, relief=SUNKEN, bd=2, bg="white")
+    # QR Code display frame with fixed size
+    qr_frame = Frame(main_frame, relief=SUNKEN, bd=2, bg="white", width=280, height=280)
     qr_frame.pack(pady=10)
+    qr_frame.pack_propagate(False)  # Maintain fixed size
     
     qr_label = Label(qr_frame, text="Click 'Generate My QR Code' above", 
-                    font=("Arial", 12), fg="gray", bg="white", width=40, height=15)
-    qr_label.pack(padx=20, pady=20)
+                    font=("Arial", 10), fg="gray", bg="white", 
+                    wraplength=250, justify=CENTER)
+    qr_label.place(relx=0.5, rely=0.5, anchor=CENTER)  # Center the label
     
     # Secret key display (for manual entry)
     secret_frame = Frame(main_frame)
