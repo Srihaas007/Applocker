@@ -101,6 +101,8 @@ def user_setup():
     4. Click 'Complete Setup' to finish
     
     Each user gets their own unique setup!
+    
+    🔄 Lost your QR code? Use the buttons below to get it back!
     """
     
     instructions_label = Label(main_frame, text=instructions, font=("Arial", 10), justify=LEFT, bg="lightyellow", padx=10, pady=10)
@@ -162,14 +164,39 @@ def user_setup():
     Button(main_frame, text="Generate My QR Code", command=generate_user_qr, 
            bg="lightblue", font=("Arial", 12, "bold"), pady=5).pack(pady=10)
 
+    # Quick setup button for impatient users
+    def quick_setup():
+        """Generate QR code automatically with default email"""
+        user_email = user_entry.get().strip()
+        if not user_email or user_email == "user@example.com":
+            user_entry.delete(0, END)
+            user_entry.insert(0, "quickuser@example.com")
+        generate_user_qr()
+    
+    Button(main_frame, text="⚡ Quick Setup (Auto-generate)", command=quick_setup,
+           bg="yellow", font=("Arial", 10, "bold"), pady=3).pack(pady=2)
+
     # Reset authenticator button (if user already exists)
     def show_reset_option():
         existing_email = get_user_email_from_storage()
         if existing_email:
-            reset_btn = Button(main_frame, text="Reset Authenticator (Lost QR Code)", 
+            # Simple "Show QR Code Again" button
+            show_qr_btn = Button(main_frame, text="Show My QR Code Again", 
+                               command=lambda: show_existing_qr_code(existing_email),
+                               bg="lightgreen", font=("Arial", 10), pady=3)
+            show_qr_btn.pack(pady=2)
+            
+            # Reset button for complete reset
+            reset_btn = Button(main_frame, text="Reset Everything (Email Verification)", 
                              command=lambda: show_reset_authenticator_window(existing_email),
                              bg="orange", font=("Arial", 10), pady=3)
-            reset_btn.pack(pady=5)
+            reset_btn.pack(pady=2)
+            
+            # Nuclear option - reset everything immediately
+            nuclear_btn = Button(main_frame, text="🔥 Reset App Completely (No Email)", 
+                                command=lambda: reset_app_completely(),
+                                bg="red", fg="white", font=("Arial", 9, "bold"), pady=3)
+            nuclear_btn.pack(pady=2)
     
     show_reset_option()
 
@@ -215,6 +242,178 @@ def user_setup():
            bg="lightgreen", font=("Arial", 12, "bold"), pady=10).pack(pady=20)
 
     setup_win.mainloop()
+
+def show_existing_qr_code(user_email):
+    """Show existing QR code for current user - no verification needed"""
+    import os
+    from app.auth import load_user_data
+    
+    try:
+        # Get existing secret
+        secret, email = load_user_data()
+        if not secret or email != user_email:
+            messagebox.showerror("Error", "No existing setup found. Please use 'Generate My QR Code' instead.")
+            return
+        
+        # Show QR window
+        qr_win = Tk()
+        qr_win.title("Your Current QR Code")
+        qr_win.geometry("500x650")
+        qr_win.resizable(False, False)
+        
+        # Main frame
+        main_frame = Frame(qr_win, padx=20, pady=20)
+        main_frame.pack(fill=BOTH, expand=True)
+        
+        # Title
+        Label(main_frame, text="Your Current QR Code", 
+              font=("Arial", 16, "bold")).pack(pady=(0, 10))
+        
+        Label(main_frame, text=f"Account: {email}", 
+              font=("Arial", 12)).pack(pady=(0, 20))
+        
+        # Generate and display QR code
+        try:
+            qr_code_path = generate_qr_code(secret, email)
+            
+            if os.path.exists(qr_code_path):
+                img = Image.open(qr_code_path)
+                img = img.resize((300, 300), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                
+                qr_label = Label(main_frame, image=photo, bg="white", relief="solid", borderwidth=2)
+                qr_label.image = photo
+                qr_label.pack(pady=20)
+            else:
+                Label(main_frame, text="QR Code generation failed", 
+                      fg="red", font=("Arial", 12)).pack(pady=20)
+        except Exception as e:
+            log_error(f"Failed to display existing QR code: {e}")
+            Label(main_frame, text="Error displaying QR code", 
+                  fg="red", font=("Arial", 12)).pack(pady=20)
+        
+        # Manual entry
+        Label(main_frame, text="Manual Entry Key:", 
+              font=("Arial", 10, "bold")).pack(anchor=W, pady=(20, 5))
+        
+        key_entry = Entry(main_frame, font=("Courier", 10), width=50)
+        key_entry.insert(0, secret)
+        key_entry.config(state=DISABLED)
+        key_entry.pack(fill=X, pady=(0, 10))
+        
+        # Copy button for the key
+        def copy_key():
+            qr_win.clipboard_clear()
+            qr_win.clipboard_append(secret)
+            messagebox.showinfo("Copied", "Secret key copied to clipboard!")
+        
+        Button(main_frame, text="Copy Key to Clipboard", command=copy_key,
+               bg="lightblue", font=("Arial", 10)).pack(pady=5)
+        
+        # Instructions
+        instructions = """
+If you deleted AppLocker from Google Authenticator:
+1. Open Google Authenticator app
+2. Tap the + button to add a new account
+3. Choose "Scan QR code" and scan the code above
+   OR
+4. Choose "Enter setup key" and paste the key below
+5. AppLocker will appear in your authenticator
+
+The 6-digit codes from your authenticator will work with AppLocker.
+        """
+        
+        Label(main_frame, text=instructions, font=("Arial", 9), 
+              justify=LEFT, bg="lightyellow", padx=10, pady=10).pack(fill=X, pady=10)
+        
+        # Close button
+        Button(main_frame, text="Done", command=qr_win.destroy, 
+               bg="lightgreen", font=("Arial", 12, "bold")).pack(pady=10)
+        
+        qr_win.mainloop()
+        
+    except Exception as e:
+        log_error(f"Failed to show existing QR code: {e}")
+        messagebox.showerror("Error", 
+                           f"Failed to show QR code: {str(e)}\n\n"
+                           f"Try using 'Generate My QR Code' to create a new one.")
+
+def reset_app_completely():
+    """Nuclear option: Reset everything without email verification"""
+    import os
+    
+    result = messagebox.askyesno("⚠️ RESET EVERYTHING", 
+                               "This will DELETE ALL AppLocker data:\n\n"
+                               "✗ Your authenticator setup\n"
+                               "✗ All locked apps\n"
+                               "✗ All user data\n"
+                               "✗ All settings\n\n"
+                               "You will need to set up AppLocker from scratch.\n\n"
+                               "Are you absolutely sure?")
+    
+    if not result:
+        return
+    
+    # Double confirmation
+    confirm = messagebox.askyesno("🔥 FINAL WARNING", 
+                                "This action CANNOT be undone!\n\n"
+                                "AppLocker will reset completely.\n\n"
+                                "Continue with FULL RESET?")
+    
+    if not confirm:
+        return
+    
+    try:
+        from app.config import USER_DATA_FILE, LOCKED_APPS_FILE
+        
+        # Delete all data files
+        files_to_delete = [
+            USER_DATA_FILE,
+            LOCKED_APPS_FILE,
+            QR_CODE_FILE,
+            os.path.join(os.path.dirname(__file__), "data", "reset_otps.json")
+        ]
+        
+        deleted_files = []
+        for file_path in files_to_delete:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    deleted_files.append(os.path.basename(file_path))
+            except Exception as e:
+                log_error(f"Failed to delete {file_path}: {e}")
+        
+        # Clear any remaining data directories
+        try:
+            data_dir = os.path.join(os.path.dirname(__file__), "data")
+            if os.path.exists(data_dir):
+                import shutil
+                shutil.rmtree(data_dir)
+        except Exception as e:
+            log_error(f"Failed to clear data directory: {e}")
+        
+        log_event("AppLocker completely reset by user")
+        
+        messagebox.showinfo("✅ Reset Complete", 
+                           f"AppLocker has been completely reset!\n\n"
+                           f"Deleted: {', '.join(deleted_files) if deleted_files else 'No files found'}\n\n"
+                           f"The app will now restart for fresh setup.")
+        
+        # Close current windows and restart setup
+        import sys
+        import subprocess
+        
+        # Start new instance
+        subprocess.Popen([sys.executable] + sys.argv)
+        
+        # Exit current instance
+        sys.exit(0)
+        
+    except Exception as e:
+        log_error(f"Failed to reset app completely: {e}")
+        messagebox.showerror("Reset Failed", 
+                           f"Failed to reset completely: {str(e)}\n\n"
+                           f"You may need to manually delete files in the app folder.")
 
 def show_reset_authenticator_window(user_email):
     """Show window to reset authenticator with email OTP verification"""
