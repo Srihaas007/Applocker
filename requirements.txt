@@ -1,0 +1,4 @@
+pyotp==2.7.0
+qrcode==7.3.1
+Pillow==10.0.1
+bcrypt==4.0.1

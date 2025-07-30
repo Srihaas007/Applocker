@@ -1,0 +1,33 @@
+# Python bytecode files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment (if using one)
+venv/
+env/
+.venv/
+.env/
+
+# Logs
+logs/
+
+# App data (temporary files)
+*.log
+*.bak
+
+# IDE/editor settings
+.vscode/
+.idea/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Secret keys or configuration files
+config.json
+secret_keys.json
+
+# QR code generated for Google Authenticator (generated dynamically)
+assets/qr_code.png
