@@ -1,14 +1,12 @@
 import json
 import pyotp
-import qrcode
 from tkinter import *
-from tkinter import simpledialog, messagebox
-from tkinter import ttk
+from tkinter import messagebox
 from PIL import ImageTk, Image
-from app.logging import log_event
+from app.logging import log_event, log_error
 from app.auth import save_secret_to_db, unlock_app
 from app.app_lock import get_installed_apps
-from app.config import QR_CODE_FILE, LOCKED_APPS_FILE, WINDOW_TITLE, QR_CODE_SIZE
+from app.config import QR_CODE_FILE, LOCKED_APPS_FILE, WINDOW_TITLE
 
 # Function to generate a secret key for Google Authenticator
 def generate_secret_key():
@@ -18,18 +16,41 @@ def generate_secret_key():
 
 # Function to generate a QR Code for Google Authenticator setup
 def generate_qr_code(secret, email):
-    totp = pyotp.TOTP(secret)
-    uri = totp.provisioning_uri(email, issuer_name="AppLocker")
-    img = qrcode.make(uri)
-    img.save(QR_CODE_FILE)  # Save the QR code image
-    log_event(f"QR code saved to {QR_CODE_FILE}.")
-    return QR_CODE_FILE
+    try:
+        # Ensure assets directory exists
+        import os
+        os.makedirs(os.path.dirname(QR_CODE_FILE), exist_ok=True)
+        
+        totp = pyotp.TOTP(secret)
+        uri = totp.provisioning_uri(email, issuer_name="AppLocker")
+        
+        # Create QR code with better settings
+        import qrcode
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(uri)
+        qr.make(fit=True)
+        
+        # Create image
+        img = qr.make_image(fill_color="black", back_color="white")
+        img.save(QR_CODE_FILE)
+        
+        log_event(f"QR code saved to {QR_CODE_FILE} for user {email}")
+        return QR_CODE_FILE
+        
+    except Exception as e:
+        log_error(f"Failed to generate QR code: {e}")
+        raise
 
 # Function to handle user setup for 2FA authentication only
 def user_setup():
     setup_win = Tk()
     setup_win.title(f"{WINDOW_TITLE} - Setup")
-    setup_win.geometry("500x600")
+    setup_win.geometry("600x700")
     setup_win.resizable(False, False)
     
     # Main frame
@@ -38,57 +59,107 @@ def user_setup():
     
     # Title
     title_label = Label(main_frame, text="AppLocker Setup", font=("Arial", 16, "bold"))
-    title_label.pack(pady=(0, 20))
+    title_label.pack(pady=(0, 10))
+    
+    # User identification frame
+    user_frame = Frame(main_frame)
+    user_frame.pack(fill=X, pady=(0, 20))
+    
+    Label(user_frame, text="Enter your name/email (for identification):", font=("Arial", 10, "bold")).pack(anchor=W)
+    user_entry = Entry(user_frame, font=("Arial", 12), width=40)
+    user_entry.pack(fill=X, pady=5)
+    user_entry.insert(0, "user@example.com")
     
     # Instructions
     instructions = """
-    1. Install Google Authenticator on your phone
-    2. Scan the QR code below
-    3. Click 'Complete Setup' to finish
+    Steps:
+    1. Enter your name/email above
+    2. Install Google Authenticator on your phone
+    3. Scan the QR code below (or enter the key manually)
+    4. Click 'Complete Setup' to finish
     
-    No PIN required - Only Google Authenticator!
+    Each user gets their own unique setup!
     """
     
-    instructions_label = Label(main_frame, text=instructions, font=("Arial", 10), justify=LEFT)
-    instructions_label.pack(pady=(0, 20))
+    instructions_label = Label(main_frame, text=instructions, font=("Arial", 10), justify=LEFT, bg="lightyellow", padx=10, pady=10)
+    instructions_label.pack(fill=X, pady=(0, 20))
 
-    # Generate secret key for Google Authenticator and create QR code
-    secret_key = generate_secret_key()
-    qr_code_path = generate_qr_code(secret_key, "user@applocker.com")
+    # Variables for QR code
+    secret_key = None
+    qr_label = None
+    secret_entry = None
 
-    # Display QR Code in a frame
-    qr_frame = Frame(main_frame, relief=SUNKEN, bd=2)
+    def generate_user_qr():
+        nonlocal secret_key, qr_label, secret_entry
+        
+        user_email = user_entry.get().strip()
+        if not user_email:
+            messagebox.showerror("Error", "Please enter your name/email first!")
+            return
+            
+        # Generate secret key for this specific user
+        secret_key = generate_secret_key()
+        log_event(f"Generated secret key for user: {user_email}")
+        
+        try:
+            # Generate QR code with user's email
+            qr_code_path = generate_qr_code(secret_key, user_email)
+            
+            # Load and display QR code
+            img = Image.open(qr_code_path)
+            img = img.resize((300, 300))  # Larger QR code
+            photo = ImageTk.PhotoImage(img)
+            qr_label.config(image=photo, text="")
+            qr_label.image = photo  # Keep a reference
+            
+            # Update secret key display
+            secret_entry.config(state=NORMAL)
+            secret_entry.delete(0, END)
+            secret_entry.insert(0, secret_key)
+            secret_entry.config(state=DISABLED)
+            
+            log_event("QR code generated and displayed successfully")
+            
+        except Exception as e:
+            qr_label.config(image="", text=f"QR Code generation failed: {str(e)}", fg="red")
+            log_error(f"QR code generation error: {e}")
+
+    # Generate QR button
+    Button(main_frame, text="Generate My QR Code", command=generate_user_qr, 
+           bg="lightblue", font=("Arial", 12, "bold"), pady=5).pack(pady=10)
+
+    # QR Code display frame
+    qr_frame = Frame(main_frame, relief=SUNKEN, bd=2, bg="white")
     qr_frame.pack(pady=10)
     
-    qr_label = Label(qr_frame)
-    qr_label.pack(padx=10, pady=10)
-    
-    # Load and display QR code
-    try:
-        img = Image.open(qr_code_path)
-        img = img.resize(QR_CODE_SIZE)
-        photo = ImageTk.PhotoImage(img)
-        qr_label.config(image=photo)
-        qr_label.image = photo  # Keep a reference
-        log_event("QR code displayed successfully")
-    except Exception as e:
-        qr_label.config(text="QR Code failed to load", fg="red")
-        log_event(f"QR code display error: {e}")
+    qr_label = Label(qr_frame, text="Click 'Generate My QR Code' above", 
+                    font=("Arial", 12), fg="gray", bg="white", width=40, height=15)
+    qr_label.pack(padx=20, pady=20)
     
     # Secret key display (for manual entry)
     secret_frame = Frame(main_frame)
-    secret_frame.pack(pady=10)
+    secret_frame.pack(fill=X, pady=10)
     
-    Label(secret_frame, text="Manual Entry Key:", font=("Arial", 10, "bold")).pack()
-    secret_entry = Entry(secret_frame, width=40, font=("Courier", 10))
-    secret_entry.insert(0, secret_key)
-    secret_entry.config(state=DISABLED)
-    secret_entry.pack(pady=5)
+    Label(secret_frame, text="Manual Entry Key (if QR scan fails):", font=("Arial", 10, "bold")).pack(anchor=W)
+    secret_entry = Entry(secret_frame, font=("Courier", 10), width=50, state=DISABLED)
+    secret_entry.pack(fill=X, pady=5)
 
     def complete_setup():
-        save_secret_to_db(secret_key)  # Save only the secret key
-        log_event("User Secret Key saved successfully")
-        messagebox.showinfo("Setup Complete", "Google Authenticator setup complete!\nYou can now lock applications.")
+        if not secret_key:
+            messagebox.showerror("Error", "Please generate your QR code first!")
+            return
+            
+        user_email = user_entry.get().strip()
+        if not user_email:
+            messagebox.showerror("Error", "Please enter your name/email!")
+            return
+            
+        # Save secret key with user info
+        save_secret_to_db(secret_key, user_email)
+        log_event(f"Setup completed for user: {user_email}")
+        messagebox.showinfo("Setup Complete", 
+                           f"Google Authenticator setup complete for {user_email}!\n"
+                           f"You can now lock applications.")
         setup_win.destroy()
         show_installed_apps()
 

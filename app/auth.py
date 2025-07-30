@@ -5,11 +5,20 @@ from app.logging import log_event, log_error
 from app.config import USER_DATA_FILE, LOCKED_APPS_FILE, TOTP_WINDOW
 import bcrypt
 
-# Function to save only the secret key to a file
-def save_secret_to_db(secret_key):
+# Function to save secret key with user info to a file
+def save_secret_to_db(secret_key, user_email="user@applocker.com"):
+    # Validate secret key is proper base32
+    try:
+        import base64
+        base64.b32decode(secret_key, casefold=True)
+    except Exception as e:
+        log_error(f"Invalid secret key format: {e}")
+        raise ValueError("Invalid secret key format")
+        
     with open(USER_DATA_FILE, "w", encoding="utf-8") as f:
         f.write(f"{secret_key}\n")  # Save the secret key
-    log_event("Secret key saved successfully")
+        f.write(f"{user_email}\n")  # Save user email
+    log_event(f"Secret key saved successfully for user: {user_email}")
 
 # Function to load user data from file
 def load_user_data():
@@ -18,10 +27,22 @@ def load_user_data():
             lines = f.readlines()
             if len(lines) >= 1:
                 secret_key = lines[0].strip()
-                return secret_key
+                user_email = lines[1].strip() if len(lines) >= 2 else "unknown"
+                
+                # Validate secret key format
+                try:
+                    import base64
+                    base64.b32decode(secret_key, casefold=True)
+                    return secret_key, user_email
+                except Exception as e:
+                    log_error(f"Invalid secret key in storage: {e}")
+                    return None, None
+                    
     except FileNotFoundError:
         log_error("User data file not found")
-    return None
+    except Exception as e:
+        log_error(f"Error loading user data: {e}")
+    return None, None
 
 # Function to get app status from locked apps file
 def get_app_status(app_name):
@@ -60,21 +81,27 @@ def unlock_app(app_name=None):
         return
     
     # Load user data to get secret key
-    secret_key = load_user_data()
+    secret_key, user_email = load_user_data()
     
     if not secret_key:
         messagebox.showerror("Error", "User data not found. Please set up the app first.")
         return
     
     # Only ask for 2FA code
-    entered_code = simpledialog.askstring("2FA Verification", f"Enter the 2FA code from Google Authenticator to unlock {app_name}:")
+    entered_code = simpledialog.askstring("2FA Verification", 
+                                        f"Enter 2FA code from Google Authenticator\n"
+                                        f"User: {user_email}\n"
+                                        f"App: {app_name}")
     
-    if entered_code and verify_totp(secret_key, entered_code):
-        messagebox.showinfo("Success", f"{app_name} unlocked successfully!")
-        log_event(f"App {app_name} unlocked successfully")
+    if not entered_code:
+        return
+        
+    if verify_totp(secret_key, entered_code):
+        messagebox.showinfo("Success", f"{app_name} unlocked successfully!\nUnlocked for 1 hour.")
+        log_event(f"App {app_name} unlocked successfully for user {user_email}")
         # Temporarily unlock the app for 1 hour
         from app.process_manager import unlock_app_temporarily
         unlock_app_temporarily(app_name, 60)
     else:
-        messagebox.showerror("Invalid 2FA Code", "The 2FA code you entered is incorrect.")
-        log_error(f"Invalid 2FA code for app {app_name}")
+        messagebox.showerror("Invalid 2FA Code", "The 2FA code you entered is incorrect.\nPlease try again.")
+        log_error(f"Invalid 2FA code for app {app_name} by user {user_email}")

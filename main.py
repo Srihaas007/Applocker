@@ -10,8 +10,17 @@ from app.logging import setup_logging
 setup_logging()
 
 def check_setup():
-    """Check if user setup is complete"""
-    return os.path.exists(USER_DATA_FILE)
+    """Check if user setup is complete and valid"""
+    if not os.path.exists(USER_DATA_FILE):
+        return False
+    
+    # Check if setup file has valid data
+    try:
+        from app.auth import load_user_data
+        secret_key, user_email = load_user_data()
+        return secret_key is not None
+    except Exception:
+        return False
 
 # Main entry point
 if __name__ == '__main__':
