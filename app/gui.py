@@ -7,6 +7,10 @@ from app.logging import log_event, log_error
 from app.auth import save_secret_to_db, unlock_app
 from app.app_lock import get_installed_apps
 from app.config import QR_CODE_FILE, LOCKED_APPS_FILE, WINDOW_TITLE
+from app.email_service import (
+    generate_otp, save_otp, verify_otp, send_reset_email, 
+    cleanup_expired_otps, get_user_email_from_storage
+)
 
 # Function to generate a secret key for Google Authenticator
 def generate_secret_key():
@@ -158,6 +162,17 @@ def user_setup():
     Button(main_frame, text="Generate My QR Code", command=generate_user_qr, 
            bg="lightblue", font=("Arial", 12, "bold"), pady=5).pack(pady=10)
 
+    # Reset authenticator button (if user already exists)
+    def show_reset_option():
+        existing_email = get_user_email_from_storage()
+        if existing_email:
+            reset_btn = Button(main_frame, text="Reset Authenticator (Lost QR Code)", 
+                             command=lambda: show_reset_authenticator_window(existing_email),
+                             bg="orange", font=("Arial", 10), pady=3)
+            reset_btn.pack(pady=5)
+    
+    show_reset_option()
+
     # QR Code display frame with fixed size
     qr_frame = Frame(main_frame, relief=SUNKEN, bd=2, bg="white", width=280, height=280)
     qr_frame.pack(pady=10)
@@ -200,6 +215,191 @@ def user_setup():
            bg="lightgreen", font=("Arial", 12, "bold"), pady=10).pack(pady=20)
 
     setup_win.mainloop()
+
+def show_reset_authenticator_window(user_email):
+    """Show window to reset authenticator with email OTP verification"""
+    reset_win = Toplevel()
+    reset_win.title("Reset Google Authenticator")
+    reset_win.geometry("500x400")
+    reset_win.resizable(False, False)
+    reset_win.grab_set()  # Make modal
+    
+    # Main frame
+    main_frame = Frame(reset_win, padx=20, pady=20)
+    main_frame.pack(fill=BOTH, expand=True)
+    
+    # Title
+    Label(main_frame, text="Reset Google Authenticator", 
+          font=("Arial", 16, "bold")).pack(pady=(0, 20))
+    
+    # Info
+    info_text = f"""Your registered email: {user_email}
+
+We will send a One-Time Password (OTP) to your email.
+This OTP will be valid for 15 minutes.
+
+After verification, you can generate a new QR code."""
+    
+    Label(main_frame, text=info_text, font=("Arial", 10), 
+          justify=LEFT, wraplength=450).pack(pady=(0, 20))
+    
+    # OTP entry (initially hidden)
+    otp_frame = Frame(main_frame)
+    otp_label = Label(otp_frame, text="Enter OTP from email:", font=("Arial", 10, "bold"))
+    otp_entry = Entry(otp_frame, font=("Arial", 12), width=10, justify=CENTER)
+    
+    # Status label
+    status_label = Label(main_frame, text="", font=("Arial", 10))
+    status_label.pack(pady=10)
+    
+    def send_otp_email():
+        """Send OTP to user's email"""
+        try:
+            # Clean up expired OTPs first
+            cleanup_expired_otps()
+            
+            # Generate new OTP
+            otp = generate_otp()
+            
+            # Save OTP
+            if save_otp(user_email, otp):
+                # Send email
+                if send_reset_email(user_email, otp):
+                    status_label.config(text="OTP sent to your email! Check your inbox.", fg="green")
+                    
+                    # Show OTP entry
+                    otp_frame.pack(fill=X, pady=10)
+                    otp_label.pack(anchor=W)
+                    otp_entry.pack(fill=X, pady=5)
+                    
+                    # Hide send button, show verify button
+                    send_btn.pack_forget()
+                    verify_btn.pack(pady=10)
+                    
+                    log_event(f"Reset OTP sent to {user_email}")
+                else:
+                    status_label.config(text="Failed to send email. Check email configuration.", fg="red")
+            else:
+                status_label.config(text="Failed to generate OTP. Please try again.", fg="red")
+                
+        except Exception as e:
+            log_error(f"Failed to send reset OTP: {e}")
+            status_label.config(text="Error sending OTP. Please try again.", fg="red")
+    
+    def verify_and_reset():
+        """Verify OTP and proceed to reset"""
+        entered_otp = otp_entry.get().strip()
+        if not entered_otp:
+            status_label.config(text="Please enter the OTP from your email.", fg="red")
+            return
+        
+        if verify_otp(user_email, entered_otp):
+            status_label.config(text="OTP verified! Generating new QR code...", fg="green")
+            reset_win.after(1000, lambda: complete_reset(user_email, reset_win))
+        else:
+            status_label.config(text="Invalid or expired OTP. Please try again.", fg="red")
+    
+    def complete_reset(email, window):
+        """Complete the reset process with new QR code"""
+        try:
+            # Generate new secret
+            new_secret = generate_secret_key()
+            
+            # Save new secret
+            save_secret_to_db(new_secret, email)
+            
+            # Close reset window
+            window.destroy()
+            
+            # Show success and new QR
+            messagebox.showinfo("Reset Complete", 
+                               f"Authenticator reset successful!\n"
+                               f"A new QR code will be generated for {email}")
+            
+            # Show setup window with new QR
+            show_new_qr_setup(email, new_secret)
+            
+        except Exception as e:
+            log_error(f"Failed to complete reset: {e}")
+            messagebox.showerror("Reset Failed", "Failed to complete reset. Please try again.")
+    
+    # Buttons
+    send_btn = Button(main_frame, text="Send OTP to Email", 
+                     command=send_otp_email, bg="lightblue", 
+                     font=("Arial", 12, "bold"), pady=5)
+    send_btn.pack(pady=10)
+    
+    verify_btn = Button(main_frame, text="Verify OTP & Reset", 
+                       command=verify_and_reset, bg="lightgreen", 
+                       font=("Arial", 12, "bold"), pady=5)
+    
+    # Close button
+    Button(main_frame, text="Cancel", command=reset_win.destroy, 
+           bg="lightgray", font=("Arial", 10)).pack(side=BOTTOM, pady=20)
+
+def show_new_qr_setup(email, secret):
+    """Show QR code setup window after reset"""
+    import os  # Import os here for file checking
+    
+    qr_win = Tk()
+    qr_win.title("New QR Code - Scan with Authenticator")
+    qr_win.geometry("500x600")
+    
+    # Main frame
+    main_frame = Frame(qr_win, padx=20, pady=20)
+    main_frame.pack(fill=BOTH, expand=True)
+    
+    # Title
+    Label(main_frame, text="New QR Code Generated", 
+          font=("Arial", 16, "bold")).pack(pady=(0, 10))
+    
+    Label(main_frame, text=f"Account: {email}", 
+          font=("Arial", 12)).pack(pady=(0, 20))
+    
+    # Generate and display QR code
+    try:
+        qr_code_path = generate_qr_code(secret, email)
+        
+        if os.path.exists(qr_code_path):
+            img = Image.open(qr_code_path)
+            img = img.resize((300, 300), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            
+            qr_label = Label(main_frame, image=photo, bg="white")
+            qr_label.image = photo
+            qr_label.pack(pady=20)
+        else:
+            Label(main_frame, text="QR Code generation failed", 
+                  fg="red", font=("Arial", 12)).pack(pady=20)
+    except Exception as e:
+        log_error(f"Failed to display new QR code: {e}")
+        Label(main_frame, text="Error displaying QR code", 
+              fg="red", font=("Arial", 12)).pack(pady=20)
+    
+    # Manual entry
+    Label(main_frame, text="Manual Entry Key:", 
+          font=("Arial", 10, "bold")).pack(anchor=W, pady=(20, 5))
+    
+    key_entry = Entry(main_frame, font=("Courier", 10), width=50)
+    key_entry.insert(0, secret)
+    key_entry.config(state=DISABLED)
+    key_entry.pack(fill=X, pady=(0, 20))
+    
+    # Instructions
+    instructions = """
+1. Delete the old AppLocker entry from Google Authenticator
+2. Scan this new QR code or enter the key manually
+3. The new 6-digit codes will work with AppLocker
+4. Close this window when done
+    """
+    
+    Label(main_frame, text=instructions, font=("Arial", 10), 
+          justify=LEFT, bg="lightyellow", padx=10, pady=10).pack(fill=X, pady=10)
+    
+    Button(main_frame, text="Done", command=qr_win.destroy, 
+           bg="lightgreen", font=("Arial", 12, "bold")).pack(pady=20)
+    
+    qr_win.mainloop()
 
 def show_installed_apps():
     apps = get_installed_apps()  # Get the list of installed apps
