@@ -2,11 +2,12 @@ import json
 import pyotp
 from tkinter import simpledialog, messagebox
 from app.logging import log_event, log_error
+from app.config import USER_DATA_FILE, LOCKED_APPS_FILE, TOTP_WINDOW
 import bcrypt
 
 # Function to save the PIN and secret key to a file
 def save_pin_to_db(hashed_pin, secret_key):
-    with open("user_data.txt", "w", encoding="utf-8") as f:
+    with open(USER_DATA_FILE, "w", encoding="utf-8") as f:
         f.write(f"{hashed_pin.decode()}\n")  # Save the hashed PIN (decoded from bytes)
         f.write(f"{secret_key}\n")  # Save the secret key
     log_event("PIN and secret key saved successfully")
@@ -14,7 +15,7 @@ def save_pin_to_db(hashed_pin, secret_key):
 # Function to load user data from file
 def load_user_data():
     try:
-        with open("user_data.txt", "r", encoding="utf-8") as f:
+        with open(USER_DATA_FILE, "r", encoding="utf-8") as f:
             lines = f.readlines()
             if len(lines) >= 2:
                 hashed_pin = lines[0].strip()
@@ -27,7 +28,7 @@ def load_user_data():
 # Function to get app PIN from locked apps file
 def get_app_pin(app_name):
     try:
-        with open("locked_apps.json", "r", encoding="utf-8") as file:
+        with open(LOCKED_APPS_FILE, "r", encoding="utf-8") as file:
             locked_apps = json.load(file)
             return locked_apps.get(app_name)
     except (FileNotFoundError, json.JSONDecodeError):
@@ -36,10 +37,9 @@ def get_app_pin(app_name):
 # Function to verify TOTP code entered by the user
 def verify_totp(secret, entered_code):
     totp = pyotp.TOTP(secret)
-    generated_code = totp.now()  # Generate the TOTP code for current time
-    log_event(f"Generated code: {generated_code}")
-    is_valid = totp.verify(entered_code)  # Check if the entered code is correct
-    log_event(f"Entered code: {entered_code} - Valid: {is_valid}")
+    # Use a wider window for more flexibility
+    is_valid = totp.verify(entered_code, valid_window=TOTP_WINDOW)
+    log_event(f"TOTP verification - Valid: {is_valid}")
     return is_valid
 
 # Function to verify the entered PIN against the stored hashed PIN

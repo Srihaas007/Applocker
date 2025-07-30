@@ -9,6 +9,7 @@ from app.logging import log_event
 from app.user_data import hash_pin
 from app.auth import save_pin_to_db, unlock_app
 from app.app_lock import get_installed_apps
+from app.config import QR_CODE_FILE, LOCKED_APPS_FILE, WINDOW_TITLE, QR_CODE_SIZE
 
 # Function to generate a secret key for Google Authenticator
 def generate_secret_key():
@@ -21,15 +22,14 @@ def generate_qr_code(secret, email):
     totp = pyotp.TOTP(secret)
     uri = totp.provisioning_uri(email, issuer_name="AppLocker")
     img = qrcode.make(uri)
-    qr_code_path = 'assets/qr_code.png'  # Path to save the QR code
-    img.save(qr_code_path)  # Save the QR code image
-    log_event(f"QR code saved to {qr_code_path}.")
-    return qr_code_path
+    img.save(QR_CODE_FILE)  # Save the QR code image
+    log_event(f"QR code saved to {QR_CODE_FILE}.")
+    return QR_CODE_FILE
 
 # Function to display QR Code
 def display_qr_code(qr_code_path):
     img = Image.open(qr_code_path)
-    img = img.resize((250, 250))
+    img = img.resize(QR_CODE_SIZE)
     img = ImageTk.PhotoImage(img)
     qr_label.config(image=img)
     qr_label.image = img
@@ -38,7 +38,8 @@ def display_qr_code(qr_code_path):
 # Function to handle user setup for PIN and QR code generation
 def user_setup():
     setup_win = Tk()
-    setup_win.title("AppLocker Setup")
+    setup_win.title(f"{WINDOW_TITLE} - Setup")
+    setup_win.geometry("400x500")
 
     # Entry for PIN
     Label(setup_win, text="Enter your PIN").grid(row=0, column=0)
@@ -121,14 +122,14 @@ def lock_selected_app(app_name):
         if pin:
             # Save app and PIN association in a JSON file
             try:
-                with open("locked_apps.json", "r") as file:
+                with open(LOCKED_APPS_FILE, "r", encoding="utf-8") as file:
                     locked_apps = json.load(file)
             except (FileNotFoundError, json.JSONDecodeError):
                 locked_apps = {}
 
             locked_apps[app_name] = hash_pin(pin).decode()
 
-            with open("locked_apps.json", "w") as file:
+            with open(LOCKED_APPS_FILE, "w", encoding="utf-8") as file:
                 json.dump(locked_apps, file, indent=2)
 
             log_event(f"App '{app_name}' is locked with PIN")
@@ -141,12 +142,12 @@ def lock_selected_app(app_name):
 def show_unlock_interface():
     """Show the main unlock interface for managing locked apps"""
     unlock_win = Tk()
-    unlock_win.title("AppLocker - Manage Locked Apps")
-    unlock_win.geometry("500x400")
+    unlock_win.title(WINDOW_TITLE)
+    unlock_win.geometry("600x500")
     
     # Load locked apps
     try:
-        with open("locked_apps.json", "r", encoding="utf-8") as file:
+        with open(LOCKED_APPS_FILE, "r", encoding="utf-8") as file:
             locked_apps = json.load(file)
     except (FileNotFoundError, json.JSONDecodeError):
         locked_apps = {}
@@ -189,7 +190,7 @@ def show_unlock_interface():
                 result = messagebox.askyesno("Confirm", f"Remove lock from '{app_name}'?")
                 if result:
                     del locked_apps[app_name]
-                    with open("locked_apps.json", "w", encoding="utf-8") as file:
+                    with open(LOCKED_APPS_FILE, "w", encoding="utf-8") as file:
                         json.dump(locked_apps, file, indent=2)
                     listbox.delete(selection[0])
                     log_event(f"Lock removed from app: {app_name}")
