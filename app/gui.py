@@ -1,5 +1,10 @@
 import json
 import pyotp
+import qrcode
+import os
+import sys
+import subprocess
+import shutil
 from tkinter import *
 from tkinter import messagebox
 from PIL import ImageTk, Image
@@ -72,17 +77,71 @@ def generate_qr_code(secret, email):
 def user_setup():
     setup_win = Tk()
     setup_win.title(f"{WINDOW_TITLE} - Setup")
-    setup_win.geometry("600x850")  # Much taller to show all elements
+    setup_win.geometry("600x900")  # Made even taller to ensure all elements are visible
     setup_win.resizable(True, True)  # Allow resizing
     
-    # Main frame
-    main_frame = Frame(setup_win, padx=20, pady=20)
+    # Create a canvas and scrollbar for scrolling
+    canvas = Canvas(setup_win)
+    scrollbar = Scrollbar(setup_win, orient="vertical", command=canvas.yview)
+    scrollable_frame = Frame(canvas)
+    
+    scrollable_frame.bind(
+        "<Configure>",
+        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
+    
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    
+    # Pack the canvas and scrollbar
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+    
+    # Add mouse wheel scrolling
+    def on_mousewheel(event):
+        canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+    
+    canvas.bind("<MouseWheel>", on_mousewheel)
+    
+    # Main frame (now inside the scrollable frame)
+    main_frame = Frame(scrollable_frame, padx=20, pady=20)
     main_frame.pack(fill=BOTH, expand=True)
     
-    # Title
-    title_label = Label(main_frame, text="AppLocker Setup", font=("Arial", 16, "bold"))
+    # Title with progress indicator
+    title_label = Label(main_frame, text="AppLocker Setup - Step 1 of 4", 
+                       font=("Arial", 16, "bold"))
     title_label.pack(pady=(0, 10))
     
+    # Progress bar visual
+    progress_frame = Frame(main_frame)
+    progress_frame.pack(fill=X, pady=(0, 20))
+    
+    # Variables for QR code and progress tracking
+    secret_key = None
+    qr_label = None
+    secret_entry = None
+    progress_labels = []
+    steps = ["Enter Email", "Generate QR", "Scan Code", "Complete"]
+    
+    def update_progress(step):
+        """Update the progress indicator"""
+        for i, label in enumerate(progress_labels):
+            if i <= step:
+                label.config(bg="lightgreen")
+            else:
+                label.config(bg="lightgray")
+        
+        step_names = ["Enter Email", "Generate QR", "Scan Code", "Complete"]
+        title_label.config(text=f"AppLocker Setup - Step {step+1} of 4: {step_names[step]}")
+    
+    # Store progress labels for updates
+    for i, step in enumerate(steps):
+        color = "lightgreen" if i == 0 else "lightgray"
+        step_label = Label(progress_frame, text=f"{i+1}. {step}", 
+                          bg=color, font=("Arial", 9), padx=10, pady=5)
+        step_label.pack(side=LEFT, padx=2, fill=X, expand=True)
+        progress_labels.append(step_label)
+
     # User identification frame
     user_frame = Frame(main_frame)
     user_frame.pack(fill=X, pady=(0, 20))
@@ -92,38 +151,75 @@ def user_setup():
     user_entry.pack(fill=X, pady=5)
     user_entry.insert(0, "user@example.com")
     
-    # Instructions
+    # Bind email entry to update progress
+    def on_email_change(*args):
+        if user_entry.get().strip():
+            update_progress(1)
+        else:
+            update_progress(0)
+    
+    user_entry.bind('<KeyRelease>', on_email_change)
+
+    # Instructions with better formatting
     instructions = """
-    Steps:
-    1. Enter your name/email above
-    2. Install Google Authenticator on your phone
-    3. Scan the QR code below (or enter the key manually)
-    4. Click 'Complete Setup' to finish
-    
-    Each user gets their own unique setup!
-    
-    🔄 Lost your QR code? Use the buttons below to get it back!
+📋 SETUP INSTRUCTIONS:
+
+1️⃣ Enter your name/email above (for account identification)
+2️⃣ Install Google Authenticator app on your phone  
+3️⃣ Click 'Generate My QR Code' button below
+4️⃣ Scan the QR code with Google Authenticator
+5️⃣ Click '✅ Complete Setup' to finish
+
+🔄 Lost your QR code? Use the recovery buttons below!
+📧 Each user gets their own unique setup!
+🔒 Your apps will be protected with 6-digit codes from the authenticator!
     """
     
-    instructions_label = Label(main_frame, text=instructions, font=("Arial", 10), justify=LEFT, bg="lightyellow", padx=10, pady=10)
-    instructions_label.pack(fill=X, pady=(0, 20))
-
-    # Variables for QR code
-    secret_key = None
-    qr_label = None
-    secret_entry = None
+    instructions_frame = Frame(main_frame, bg="lightyellow", relief="solid", bd=2)
+    instructions_frame.pack(fill=X, pady=(0, 20))
+    
+    instructions_label = Label(instructions_frame, text=instructions, 
+                              font=("Arial", 10), justify=LEFT, 
+                              bg="lightyellow", padx=15, pady=15, 
+                              wraplength=500)
+    instructions_label.pack(fill=X)
 
     def generate_user_qr():
         nonlocal secret_key, qr_label, secret_entry
         
         user_email = user_entry.get().strip()
         if not user_email:
-            messagebox.showerror("Error", "Please enter your name/email first!")
+            messagebox.showerror("Missing Information", 
+                               "Please enter your name/email first!\n\n"
+                               "This helps identify your AppLocker account.")
             return
+        
+        # Update progress to step 2
+        update_progress(1)
+        
+        # Validate email format (basic validation)
+        if "@" not in user_email and user_email != "quickuser@example.com":
+            result = messagebox.askyesno("Email Format", 
+                                       f"'{user_email}' doesn't look like an email address.\n\n"
+                                       f"Continue anyway?")
+            if not result:
+                return
             
         # Generate secret key for this specific user
-        secret_key = generate_secret_key()
-        log_event(f"Generated secret key for user: {user_email}")
+        try:
+            secret_key = generate_secret_key()
+            log_event(f"Generated secret key for user: {user_email}")
+            
+            # Update status
+            qr_label.config(image="", text="Generating QR code...", 
+                           fg="blue", bg="white", compound='none')
+            setup_win.update()
+            
+        except Exception as e:
+            log_error(f"Failed to generate secret key: {e}")
+            messagebox.showerror("Generation Failed", 
+                               f"Failed to generate secret key: {str(e)}")
+            return
         
         try:
             # Generate QR code with user's email
@@ -141,9 +237,20 @@ def user_setup():
                                width=260, height=260)
                 qr_label.image = photo  # Keep a reference to prevent garbage collection
                 log_event("QR code displayed successfully")
+                
+                # Update progress to step 3 (scan code)
+                update_progress(2)
+                
+                # Show success message
+                messagebox.showinfo("QR Code Ready!", 
+                                   f"QR code generated for {user_email}!\n\n"
+                                   f"📱 Open Google Authenticator\n"
+                                   f"📸 Scan the QR code below\n"
+                                   f"✅ Then click 'Complete Setup'")
             else:
-                qr_label.config(image="", text="QR Code file not found!", 
+                qr_label.config(image="", text="❌ QR Code file not found!", 
                                fg="red", bg="white", compound='none')
+                messagebox.showerror("File Error", "QR code file was not created properly.")
             
             # Update secret key display
             secret_entry.config(state=NORMAL)
@@ -152,13 +259,17 @@ def user_setup():
             secret_entry.config(state=DISABLED)
             
         except Exception as e:
-            qr_label.config(image="", text=f"QR Generation Error:\n{str(e)}", fg="red", bg="white")
+            qr_label.config(image="", text=f"❌ QR Generation Error:\n{str(e)}", 
+                           fg="red", bg="white")
             log_error(f"QR code generation error: {e}")
             # Show detailed error to user
-            messagebox.showerror("QR Code Error", f"Failed to generate QR code:\n{str(e)}")
-            
-    # Import os for file checking
-    import os
+            messagebox.showerror("QR Code Error", 
+                               f"Failed to generate QR code:\n{str(e)}\n\n"
+                               f"Please check:\n"
+                               f"• Internet connection\n"
+                               f"• App permissions\n"
+                               f"• Disk space\n\n"
+                               f"Try again or use Quick Setup.")
 
     # Generate QR button
     Button(main_frame, text="Generate My QR Code", command=generate_user_qr, 
@@ -220,26 +331,70 @@ def user_setup():
 
     def complete_setup():
         if not secret_key:
-            messagebox.showerror("Error", "Please generate your QR code first!")
+            messagebox.showerror("Setup Incomplete", 
+                               "Please generate your QR code first!\n\n"
+                               "Steps:\n"
+                               "1. Click 'Generate My QR Code'\n"
+                               "2. Scan the QR code with Google Authenticator\n"
+                               "3. Then click 'Complete Setup'")
             return
             
         user_email = user_entry.get().strip()
         if not user_email:
-            messagebox.showerror("Error", "Please enter your name/email!")
+            messagebox.showerror("Missing Information", 
+                               "Please enter your name/email for identification!")
+            return
+        
+        if user_email == "user@example.com":
+            result = messagebox.askyesno("Confirm Email", 
+                                       f"You're using the default email: {user_email}\n\n"
+                                       f"Would you like to change it to your actual email?")
+            if result:
+                return
+        
+        # Final confirmation
+        confirm = messagebox.askyesno("Complete Setup", 
+                                    f"Complete AppLocker setup for:\n{user_email}\n\n"
+                                    f"Make sure you've scanned the QR code with Google Authenticator!\n\n"
+                                    f"Continue?")
+        
+        if not confirm:
             return
             
-        # Save secret key with user info
-        save_secret_to_db(secret_key, user_email)
-        log_event(f"Setup completed for user: {user_email}")
-        messagebox.showinfo("Setup Complete", 
-                           f"Google Authenticator setup complete for {user_email}!\n"
-                           f"You can now lock applications.")
-        setup_win.destroy()
-        show_installed_apps()
+        try:
+            # Save secret key with user info
+            save_secret_to_db(secret_key, user_email)
+            log_event(f"Setup completed for user: {user_email}")
+            
+            # Update progress to final step
+            update_progress(3)
+            
+            # Success message with next steps
+            messagebox.showinfo("🎉 Setup Complete!", 
+                               f"AppLocker setup successful for {user_email}!\n\n"
+                               f"✅ Google Authenticator configured\n"
+                               f"✅ User account created\n"
+                               f"✅ Ready to lock applications\n\n"
+                               f"Next: Choose apps to lock with authenticator protection.")
+            
+            setup_win.destroy()
+            show_installed_apps()
+            
+        except Exception as e:
+            log_error(f"Setup failed: {e}")
+            messagebox.showerror("Setup Failed", 
+                               f"Failed to complete setup: {str(e)}\n\n"
+                               f"Please try again or contact support.")
 
-    # Setup button
-    Button(main_frame, text="Complete Setup", command=complete_setup, 
-           bg="lightgreen", font=("Arial", 12, "bold"), pady=10).pack(pady=20)
+    # Setup button - make it more prominent
+    setup_button_frame = Frame(main_frame, bg="lightgreen", relief="raised", bd=3)
+    setup_button_frame.pack(pady=30, padx=20, fill=X)
+    
+    Button(setup_button_frame, text="✅ Complete Setup", command=complete_setup, 
+           bg="lightgreen", font=("Arial", 14, "bold"), pady=15, width=20).pack(pady=10)
+    
+    Label(setup_button_frame, text="Click here after scanning the QR code", 
+          font=("Arial", 10), bg="lightgreen", fg="darkgreen").pack(pady=(0, 10))
 
     setup_win.mainloop()
 
@@ -782,6 +937,19 @@ def show_unlock_interface():
         Button(btn_frame, text="Unlock Selected", command=unlock_selected, bg="lightgreen").pack(side=LEFT, padx=5)
         Button(btn_frame, text="Remove Lock", command=remove_lock, bg="lightcoral").pack(side=LEFT, padx=5)
         Button(btn_frame, text="Lock New Apps", command=lambda: [unlock_win.destroy(), show_installed_apps()]).pack(side=LEFT, padx=5)
+        
+        # Add QR code and reset options
+        Button(btn_frame, text="Show My QR Code", command=lambda: show_my_qr_from_main(), bg="lightblue").pack(side=LEFT, padx=5)
+        Button(btn_frame, text="🔥 Reset All", command=lambda: reset_app_completely(), bg="red", fg="white").pack(side=LEFT, padx=5)
+        
         Button(btn_frame, text="Exit", command=unlock_win.destroy).pack(side=LEFT, padx=5)
     
     unlock_win.mainloop()
+
+def show_my_qr_from_main():
+    """Show QR code from main interface"""
+    user_email = get_user_email_from_storage()
+    if user_email:
+        show_existing_qr_code(user_email)
+    else:
+        messagebox.showerror("Error", "No user setup found. Please restart AppLocker to set up.")
