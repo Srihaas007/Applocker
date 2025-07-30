@@ -30,9 +30,12 @@ QR_CODE_FILE = ASSETS_DIR / "qr_code.png"
 LOG_FILE = LOGS_DIR / "app_logs.log"
 
 # Security Settings
-MIN_PIN_LENGTH = 4
-MAX_PIN_LENGTH = 12
 TOTP_WINDOW = 1  # Time window for TOTP validation (30 second intervals)
+UNLOCK_DURATION_MINUTES = 60  # How long apps stay unlocked after authentication
+
+# Process Monitoring Settings
+MONITOR_INTERVAL = 2  # Seconds between process checks
+BLOCK_WARNING_TITLE = "AppLocker - Access Denied"
 
 # GUI Settings
 WINDOW_TITLE = f"{APP_NAME} v{APP_VERSION}"

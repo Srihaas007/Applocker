@@ -6,8 +6,7 @@ from tkinter import simpledialog, messagebox
 from tkinter import ttk
 from PIL import ImageTk, Image
 from app.logging import log_event
-from app.user_data import hash_pin
-from app.auth import save_pin_to_db, unlock_app
+from app.auth import save_secret_to_db, unlock_app
 from app.app_lock import get_installed_apps
 from app.config import QR_CODE_FILE, LOCKED_APPS_FILE, WINDOW_TITLE, QR_CODE_SIZE
 
@@ -26,50 +25,76 @@ def generate_qr_code(secret, email):
     log_event(f"QR code saved to {QR_CODE_FILE}.")
     return QR_CODE_FILE
 
-# Function to display QR Code
-def display_qr_code(qr_code_path):
-    img = Image.open(qr_code_path)
-    img = img.resize(QR_CODE_SIZE)
-    img = ImageTk.PhotoImage(img)
-    qr_label.config(image=img)
-    qr_label.image = img
-    log_event("QR code displayed to user.")
-
-# Function to handle user setup for PIN and QR code generation
+# Function to handle user setup for 2FA authentication only
 def user_setup():
     setup_win = Tk()
     setup_win.title(f"{WINDOW_TITLE} - Setup")
-    setup_win.geometry("400x500")
-
-    # Entry for PIN
-    Label(setup_win, text="Enter your PIN").grid(row=0, column=0)
-    pin_entry = Entry(setup_win, show="*")
-    pin_entry.grid(row=0, column=1)
+    setup_win.geometry("500x600")
+    setup_win.resizable(False, False)
+    
+    # Main frame
+    main_frame = Frame(setup_win, padx=20, pady=20)
+    main_frame.pack(fill=BOTH, expand=True)
+    
+    # Title
+    title_label = Label(main_frame, text="AppLocker Setup", font=("Arial", 16, "bold"))
+    title_label.pack(pady=(0, 20))
+    
+    # Instructions
+    instructions = """
+    1. Install Google Authenticator on your phone
+    2. Scan the QR code below
+    3. Click 'Complete Setup' to finish
+    
+    No PIN required - Only Google Authenticator!
+    """
+    
+    instructions_label = Label(main_frame, text=instructions, font=("Arial", 10), justify=LEFT)
+    instructions_label.pack(pady=(0, 20))
 
     # Generate secret key for Google Authenticator and create QR code
     secret_key = generate_secret_key()
-    qr_code_path = generate_qr_code(secret_key, "user@example.com")
+    qr_code_path = generate_qr_code(secret_key, "user@applocker.com")
 
-    # Display QR Code
-    global qr_label
-    qr_label = Label(setup_win)
-    qr_label.grid(row=1, column=0, columnspan=2)
-    display_qr_code(qr_code_path)
+    # Display QR Code in a frame
+    qr_frame = Frame(main_frame, relief=SUNKEN, bd=2)
+    qr_frame.pack(pady=10)
+    
+    qr_label = Label(qr_frame)
+    qr_label.pack(padx=10, pady=10)
+    
+    # Load and display QR code
+    try:
+        img = Image.open(qr_code_path)
+        img = img.resize(QR_CODE_SIZE)
+        photo = ImageTk.PhotoImage(img)
+        qr_label.config(image=photo)
+        qr_label.image = photo  # Keep a reference
+        log_event("QR code displayed successfully")
+    except Exception as e:
+        qr_label.config(text="QR Code failed to load", fg="red")
+        log_event(f"QR code display error: {e}")
+    
+    # Secret key display (for manual entry)
+    secret_frame = Frame(main_frame)
+    secret_frame.pack(pady=10)
+    
+    Label(secret_frame, text="Manual Entry Key:", font=("Arial", 10, "bold")).pack()
+    secret_entry = Entry(secret_frame, width=40, font=("Courier", 10))
+    secret_entry.insert(0, secret_key)
+    secret_entry.config(state=DISABLED)
+    secret_entry.pack(pady=5)
 
-    def save_data():
-        pin = pin_entry.get()
-        if pin:
-            # Save the hashed PIN to a file or database (securely)
-            hashed_pin = hash_pin(pin)
-            save_pin_to_db(hashed_pin, secret_key)  # Save the hashed PIN and secret key
-            log_event(f"User PIN and Secret Key saved successfully.")
-            messagebox.showinfo("Setup Complete", "Your PIN and Secret Key have been saved!")
-            setup_win.destroy()
+    def complete_setup():
+        save_secret_to_db(secret_key)  # Save only the secret key
+        log_event("User Secret Key saved successfully")
+        messagebox.showinfo("Setup Complete", "Google Authenticator setup complete!\nYou can now lock applications.")
+        setup_win.destroy()
+        show_installed_apps()
 
-            # Show installed apps after setup
-            show_installed_apps()
-
-    Button(setup_win, text="Save", command=save_data).grid(row=2, column=0, columnspan=2)
+    # Setup button
+    Button(main_frame, text="Complete Setup", command=complete_setup, 
+           bg="lightgreen", font=("Arial", 12, "bold"), pady=10).pack(pady=20)
 
     setup_win.mainloop()
 
@@ -80,62 +105,119 @@ def show_installed_apps():
         return
 
     # Display apps in a new window
-    apps_win = Toplevel()
+    apps_win = Tk()
     apps_win.title("Select Apps to Lock")
+    apps_win.geometry("800x600")
+    apps_win.resizable(True, True)
 
+    # Main frame
+    main_frame = Frame(apps_win, padx=20, pady=20)
+    main_frame.pack(fill=BOTH, expand=True)
+    
+    # Title
+    title_label = Label(main_frame, text=f"Found {len(apps)} Installed Applications", 
+                       font=("Arial", 14, "bold"))
+    title_label.pack(pady=(0, 10))
+    
+    # Search frame
+    search_frame = Frame(main_frame)
+    search_frame.pack(fill=X, pady=(0, 10))
+    
+    Label(search_frame, text="Search:", font=("Arial", 10)).pack(side=LEFT)
+    search_entry = Entry(search_frame, font=("Arial", 10))
+    search_entry.pack(side=LEFT, padx=(5, 10), fill=X, expand=True)
+    
     # Create a frame to hold the listbox and the scrollbar
-    frame = Frame(apps_win)
-    frame.grid(row=0, column=0, padx=10, pady=10)
+    list_frame = Frame(main_frame)
+    list_frame.pack(fill=BOTH, expand=True)
 
-    # Add a scrollbar to the listbox
-    scrollbar = Scrollbar(frame, orient=VERTICAL)
-    listbox = Listbox(frame, height=15, width=50, yscrollcommand=scrollbar.set)
-    for app in apps:
+    # Add scrollbars to the listbox
+    v_scrollbar = Scrollbar(list_frame, orient=VERTICAL)
+    h_scrollbar = Scrollbar(list_frame, orient=HORIZONTAL)
+    
+    listbox = Listbox(list_frame, 
+                     height=20, 
+                     font=("Arial", 10),
+                     yscrollcommand=v_scrollbar.set,
+                     xscrollcommand=h_scrollbar.set,
+                     selectmode=SINGLE)
+    
+    # Populate listbox with apps
+    for app in sorted(apps):
         listbox.insert(END, app)
     
-    listbox.grid(row=0, column=0)
-    scrollbar.config(command=listbox.yview)
-    scrollbar.grid(row=0, column=1, sticky='ns')
-
-    # Create a search bar to filter the apps
-    search_label = Label(frame, text="Search App:")
-    search_label.grid(row=1, column=0)
+    # Configure scrollbars
+    v_scrollbar.config(command=listbox.yview)
+    h_scrollbar.config(command=listbox.xview)
     
-    search_entry = Entry(frame)
-    search_entry.grid(row=1, column=1)
+    # Pack scrollbars and listbox
+    listbox.grid(row=0, column=0, sticky="nsew")
+    v_scrollbar.grid(row=0, column=1, sticky="ns")
+    h_scrollbar.grid(row=1, column=0, sticky="ew")
+    
+    # Configure grid weights
+    list_frame.grid_rowconfigure(0, weight=1)
+    list_frame.grid_columnconfigure(0, weight=1)
     
     def search_apps():
         search_query = search_entry.get().lower()
         listbox.delete(0, END)
-        for app in apps:
+        for app in sorted(apps):
             if search_query in app.lower():
                 listbox.insert(END, app)
 
-    search_button = Button(frame, text="Search", command=search_apps)
-    search_button.grid(row=1, column=2)
+    search_entry.bind('<KeyRelease>', lambda e: search_apps())
+    
+    # Buttons frame
+    btn_frame = Frame(main_frame)
+    btn_frame.pack(fill=X, pady=(10, 0))
 
-    Button(apps_win, text="Lock Selected App", command=lambda: lock_selected_app(listbox.get(ACTIVE))).grid(row=1, column=0, columnspan=2)
+    Button(btn_frame, text="Lock Selected App", 
+           command=lambda: lock_selected_app(listbox.get(ACTIVE), apps_win),
+           bg="lightcoral", font=("Arial", 11, "bold")).pack(side=LEFT, padx=(0, 10))
+           
+    Button(btn_frame, text="Refresh List", 
+           command=lambda: refresh_app_list(listbox),
+           bg="lightblue", font=("Arial", 11)).pack(side=LEFT, padx=(0, 10))
+           
+    Button(btn_frame, text="Back to Main", 
+           command=lambda: [apps_win.destroy(), show_unlock_interface()],
+           bg="lightgray", font=("Arial", 11)).pack(side=RIGHT)
 
-def lock_selected_app(app_name):
+def refresh_app_list(listbox):
+    """Refresh the app list"""
+    apps = get_installed_apps()
+    listbox.delete(0, END)
+    for app in sorted(apps):
+        listbox.insert(END, app)
+
+def lock_selected_app(app_name, parent_window=None):
     if app_name:
-        pin = simpledialog.askstring("PIN", f"Enter PIN to lock the app '{app_name}':", show="*")
-        if pin:
-            # Save app and PIN association in a JSON file
+        # Confirm locking
+        result = messagebox.askyesno("Confirm Lock", 
+                                   f"Lock '{app_name}' with Google Authenticator?\n\n"
+                                   f"You will need your authenticator code to unlock it.")
+        
+        if result:
+            # Save app as locked (no PIN needed)
             try:
                 with open(LOCKED_APPS_FILE, "r", encoding="utf-8") as file:
                     locked_apps = json.load(file)
             except (FileNotFoundError, json.JSONDecodeError):
                 locked_apps = {}
 
-            locked_apps[app_name] = hash_pin(pin).decode()
+            locked_apps[app_name] = True  # Just mark as locked
 
             with open(LOCKED_APPS_FILE, "w", encoding="utf-8") as file:
                 json.dump(locked_apps, file, indent=2)
 
-            log_event(f"App '{app_name}' is locked with PIN")
-            messagebox.showinfo("App Locked", f"The app '{app_name}' is now locked with your PIN.")
-        else:
-            messagebox.showerror("Error", "PIN is required to lock the app.")
+            log_event(f"App '{app_name}' is now locked")
+            messagebox.showinfo("App Locked", f"'{app_name}' is now protected with Google Authenticator!")
+            
+            # Close parent window if provided
+            if parent_window:
+                parent_window.destroy()
+                show_unlock_interface()
     else:
         messagebox.showerror("Error", "Please select an app to lock.")
 
