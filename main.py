@@ -1,5 +1,6 @@
 from app.gui import user_setup
 from app.auth import unlock_app
+from app.config import USER_DATA_FILE
 import os
 
 # Initialize logging
@@ -8,7 +9,7 @@ setup_logging()
 
 def check_setup():
     """Check if user setup is complete"""
-    return os.path.exists("user_data.txt")
+    return os.path.exists(USER_DATA_FILE)
 
 # Main entry point
 if __name__ == '__main__':
